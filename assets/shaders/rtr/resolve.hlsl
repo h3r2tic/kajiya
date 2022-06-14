@@ -79,8 +79,6 @@ void main(uint2 px : SV_DispatchThreadID, uint2 px_tile: SV_GroupID, uint idx_wi
     //px = decode_morton_2d(idx_within_group) + px_tile * 8;
     //px = (px & ~3) | ((px & 1) << 1) | ((px & 2) >> 1);
 
-    const uint2 half_px = px / 2;
-
     const float2 uv = get_uv(px, output_tex_size);
     const float depth = depth_tex[px];
 
@@ -90,7 +88,7 @@ void main(uint2 px : SV_DispatchThreadID, uint2 px_tile: SV_GroupID, uint idx_wi
     }
 
     #if !BORROW_SAMPLES && SHORT_CIRCUIT_NO_BORROW_SAMPLES
-        output_tex[px] = hit0_tex[half_px].rgb;
+        output_tex[px] = hit0_tex[px].rgb;
         ray_len_output_tex[px] = 1;
         return;
     #endif
@@ -136,7 +134,9 @@ void main(uint2 px : SV_DispatchThreadID, uint2 px_tile: SV_GroupID, uint idx_wi
     const float a2 = max(RTR_ROUGHNESS_CLAMP, gbuffer.roughness) * max(RTR_ROUGHNESS_CLAMP, gbuffer.roughness);
 
     // Project lobe footprint onto the reflector, and find the desired convolution size
-    const float surf_to_hit_dist = length(hit1_tex[half_px].xyz);
+    // TODO: maybe use a different texture for this when not using ReSTIR?
+    const float surf_to_hit_dist = length(hit1_tex[px / 2].xyz);
+
     const float eye_to_surf_dist = length(refl_ray_origin_vs);
 
     // Needed to account for perspective distortion to keep the kernel constant
@@ -214,7 +214,7 @@ void main(uint2 px : SV_DispatchThreadID, uint2 px_tile: SV_GroupID, uint idx_wi
         kernel_t1, kernel_t2);
 
     // Offset to avoid correlation with ray generation
-    float4 blue = blue_noise_for_pixel(half_px + 16, frame_constants.frame_index);
+    float4 blue = blue_noise_for_pixel(px + 16, frame_constants.frame_index);
 
     // Feeds into the `pow` to remap sample index to radius.
     // At 0.5 (sqrt), it's disk sampling, with higher values becoming conical.
@@ -227,7 +227,7 @@ void main(uint2 px : SV_DispatchThreadID, uint2 px_tile: SV_GroupID, uint idx_wi
     // Way faster, seems to look the same.
     const float ang_offset = (frame_constants.frame_index * 59 % 128) * M_PLASTIC;
 
-    Reservoir1spp center_r = Reservoir1spp::from_raw(restir_reservoir_tex[half_px]);
+    Reservoir1spp center_r = Reservoir1spp::from_raw(restir_reservoir_tex[px]);
 
     // Instead of directly increasing the sampling radius, we'll do something adaptive.
     // If a sample gets rejected, we only increase the radius of the next sample by a fraction
@@ -279,14 +279,14 @@ void main(uint2 px : SV_DispatchThreadID, uint2 px_tile: SV_GroupID, uint idx_wi
             float2 sample_uv = cs_to_uv(sample_cs.xy);
 
             // TODO: pass in `input_tex_size`
-            int2 sample_px = int2(floor(sample_uv * output_tex_size.xy / 2));
-            sample_offset = sample_px - half_px;
+            int2 sample_px = int2(floor(sample_uv * output_tex_size.xy));
+            sample_offset = sample_px - px;
         }
 
-        const int2 sample_px = half_px + sample_offset;
+        const int2 sample_px = px + sample_offset;
 
         // Only used in the non-ReSTIR path
-        const float sample_depth = half_depth_tex[sample_px];
+        const float sample_depth = depth_tex[sample_px];
 
         // Only used in the non-ReSTIR path
         const float4 packed1 = hit1_tex[sample_px];
@@ -297,22 +297,23 @@ void main(uint2 px : SV_DispatchThreadID, uint2 px_tile: SV_GroupID, uint idx_wi
             float rejection_bias = 1;
 
             const float2 sample_uv = get_uv(
-                sample_px * 2 + HALFRES_SUBSAMPLE_OFFSET,
+                sample_px,
                 output_tex_size);
 
-            // const float4 sample_gbuffer_packed = gbuffer_tex[sample_px * 2 + HALFRES_SUBSAMPLE_OFFSET];
-            // GbufferData sample_gbuffer = GbufferDataPacked::from_uint4(asuint(sample_gbuffer_packed)).unpack();
+             const float4 sample_gbuffer_packed = gbuffer_tex[sample_px];
+             GbufferData sample_gbuffer = GbufferDataPacked::from_uint4(asuint(sample_gbuffer_packed)).unpack();
 
             float3 sample_hit_normal_vs;    // only valid without ReSTIR
             if (!USE_RESTIR) {
                 sample_hit_normal_vs = hit2_tex[sample_px].xyz;
             }
 
-            #if CUT_CORNERS_IN_MATH
+            /*#if CUT_CORNERS_IN_MATH
                 const float3 sample_normal_vs = half_view_normal_tex[sample_px].xyz;
             #else
                 const float3 sample_normal_vs = normalize(half_view_normal_tex[sample_px].xyz);
-            #endif
+            #endif*/
+            const float3 sample_normal_vs = direction_world_to_view(sample_gbuffer.normal);
 
             float3 sample_hit_normal_ws;
 

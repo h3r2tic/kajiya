@@ -164,7 +164,7 @@ impl RtrRenderer {
                 ImageDesc::new_2d(
                     // TODO: This can _almost_ fit in fp16, but some edge darkening ensues.
                     vk::Format::R32G32B32A32_SFLOAT,
-                    gbuffer_desc.half_res().extent_2d(),
+                    gbuffer_desc.extent_2d(),
                 )
                 .usage(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::STORAGE),
             );
@@ -177,31 +177,28 @@ impl RtrRenderer {
                 self.temporal_hit_normal_tex.get_output_and_history(
                     rg,
                     Self::temporal_tex_desc(
-                        gbuffer_desc
-                            .format(vk::Format::R8G8B8A8_UNORM)
-                            .half_res()
-                            .extent_2d(),
+                        gbuffer_desc.format(vk::Format::R8G8B8A8_UNORM).extent_2d(),
                     ),
                 );
 
             let (mut irradiance_output_tex, mut irradiance_history_tex) =
                 self.temporal_irradiance_tex.get_output_and_history(
                     rg,
-                    Self::temporal_tex_desc(gbuffer_desc.half_res().extent_2d())
+                    Self::temporal_tex_desc(gbuffer_desc.extent_2d())
                         .format(vk::Format::R16G16B16A16_SFLOAT),
                 );
 
             let (mut reservoir_output_tex, mut reservoir_history_tex) =
                 self.temporal_reservoir_tex.get_output_and_history(
                     rg,
-                    ImageDesc::new_2d(vk::Format::R32G32_UINT, gbuffer_desc.half_res().extent_2d())
+                    ImageDesc::new_2d(vk::Format::R32G32_UINT, gbuffer_desc.extent_2d())
                         .usage(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::STORAGE),
                 );
 
             let (mut ray_output_tex, ray_history_tex) =
                 self.temporal_ray_tex.get_output_and_history(
                     rg,
-                    Self::temporal_tex_desc(gbuffer_desc.half_res().extent_2d())
+                    Self::temporal_tex_desc(gbuffer_desc.extent_2d())
                         .format(vk::Format::R16G16B16A16_SFLOAT),
                 );
 

@@ -41,6 +41,8 @@ DEFINE_WRC_BINDINGS(14)
 
 [shader("raygeneration")]
 void main() {
+    return;
+
     if (!RTR_RESTIR_USE_PATH_VALIDATION) {
         return;
     }
