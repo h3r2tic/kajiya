@@ -23,7 +23,7 @@
 [[vk::binding(5)]] Texture2D<float4> radiance_history_tex;
 [[vk::binding(6)]] Texture2D<float3> ray_orig_history_tex;
 [[vk::binding(7)]] Texture2D<float4> ray_history_tex;
-[[vk::binding(8)]] Texture2D<uint2> reservoir_history_tex;
+[[vk::binding(8)]] Texture2D<uint4> reservoir_history_tex;
 [[vk::binding(9)]] Texture2D<float4> reprojection_tex;
 [[vk::binding(10)]] Texture2D<float4> hit_normal_history_tex;
 [[vk::binding(11)]] Texture2D<float4> candidate_history_tex;
@@ -32,7 +32,7 @@
 [[vk::binding(14)]] RWTexture2D<float3> ray_orig_output_tex;
 [[vk::binding(15)]] RWTexture2D<float4> ray_output_tex;
 [[vk::binding(16)]] RWTexture2D<float4> hit_normal_output_tex;
-[[vk::binding(17)]] RWTexture2D<uint2> reservoir_out_tex;
+[[vk::binding(17)]] RWTexture2D<uint4> reservoir_out_tex;
 [[vk::binding(18)]] RWTexture2D<float4> candidate_out_tex;
 [[vk::binding(19)]] RWTexture2D<uint4> temporal_reservoir_packed_tex;
 [[vk::binding(20)]] cbuffer _ {
@@ -69,15 +69,7 @@ int2 get_rpx_offset(uint sample_i, uint frame_index) {
         int2(1, -1),
     };
 
-    const int2 reservoir_px_offset_base =
-        offsets[frame_index & 3]
-        + offsets[(sample_i + (frame_index ^ 1)) & 3];
-
-    return
-        sample_i == 0
-        ? 0
-        : int2(reservoir_px_offset_base)
-        ;
+    return offsets[frame_index & 3] + offsets[(sample_i + (frame_index ^ 1)) & 3];
 }
 
 [numthreads(8, 8, 1)]
@@ -180,10 +172,10 @@ void main(uint2 px : SV_DispatchThreadID) {
             && stream_state.M_sum < 1.25 * RESTIR_TEMPORAL_M_CLAMP;
             ++sample_i) {
             const int2 rpx_offset = get_rpx_offset(sample_i, frame_constants.frame_index);
-            if (sample_i > 0 && all(rpx_offset == 0)) {
+            /*if (sample_i > 0 && all(rpx_offset == 0)) {
                 // No point using the center sample twice
                 continue;
-            }
+            }*/
 
             const float4 reproj = reprojection_tex[hi_px + rpx_offset * 2];
 
@@ -200,6 +192,7 @@ void main(uint2 px : SV_DispatchThreadID) {
             };
             const uint2 permutation_xor_val =
                 xor_seq[frame_constants.frame_index & 3];            
+                //3;
 
             const int2 permuted_reproj_px = floor(
                 (sample_i == 0
@@ -217,14 +210,23 @@ void main(uint2 px : SV_DispatchThreadID) {
             const int2 rpx = permuted_reproj_px + rpx_offset;
             const uint2 rpx_hi = rpx * 2 + hi_px_offset;
 
+#if 0
             const int2 permuted_neighbor_px = floor(
                 (sample_i == 0
                     ? px
                     // ditto
                     : ((px + rpx_offset) ^ permutation_xor_val)) + 0.5);
+#else
+            int2 derp = px + rpx_offset;
+            derp = derp ^ (2 + abs(rpx_offset));
+            const int2 permuted_neighbor_px = (sample_i == 0 ? px : (derp - rpx_offset));
+#endif
 
             const int2 neighbor_px = permuted_neighbor_px + rpx_offset;
             const uint2 neighbor_px_hi = neighbor_px * 2 + hi_px_offset;
+
+            //const int2 rpx = neighbor_px;
+            //const uint2 rpx_hi = neighbor_px_hi;
 
             // WRONG. needs previous normal
             // const float3 sample_normal_vs = half_view_normal_tex[rpx];
@@ -234,14 +236,14 @@ void main(uint2 px : SV_DispatchThreadID) {
             //     continue;
             // }
 
-            Reservoir1spp r = Reservoir1spp::from_raw(reservoir_history_tex[rpx]);
+            Reservoir1spp r = Reservoir1spp::from_fat_raw(reservoir_history_tex[rpx]);
             const uint2 spx = reservoir_payload_to_px(r.payload);
 
             float visibility = 1;
             //float relevance = sample_i == 0 ? 1 : 0.5;
             float relevance = 1;
 
-            //const float2 sample_uv = get_uv(rpx_hi, gbuffer_tex_size);
+            const float2 sample_uv = get_uv(rpx_hi, gbuffer_tex_size);
             const float sample_depth = depth_tex[neighbor_px_hi];
 
             // WRONG: needs previous depth
@@ -277,7 +279,7 @@ void main(uint2 px : SV_DispatchThreadID) {
             #endif
 
             const float3 sample_normal_vs = half_view_normal_tex[neighbor_px].rgb;
-            const float normal_similarity_dot = max(0.0, dot(sample_normal_vs, normal_vs));
+            const float normal_similarity_dot = saturate(dot(sample_normal_vs, normal_vs));
 
         // Increases noise, but prevents leaking in areas of geometric complexity
         #if 1
@@ -288,15 +290,15 @@ void main(uint2 px : SV_DispatchThreadID) {
             }
         #endif
 
-            relevance *= normal_similarity_dot;
+            relevance *= normal_similarity_dot * normal_similarity_dot;
 
             // TODO: this needs fixing with reprojection
-            //const ViewRayContext sample_ray_ctx = ViewRayContext::from_uv_and_depth(sample_uv, sample_depth);
+            const ViewRayContext sample_ray_ctx = ViewRayContext::from_uv_and_depth(sample_uv, sample_depth);
 
             const float4 sample_hit_ws_and_dist = ray_history_tex[spx] + float4(prev_ray_orig, 0.0);
             const float3 sample_hit_ws = sample_hit_ws_and_dist.xyz;
-            //const float3 prev_dir_to_sample_hit_unnorm_ws = sample_hit_ws - sample_ray_ctx.ray_hit_ws();
-            //const float3 prev_dir_to_sample_hit_ws = normalize(prev_dir_to_sample_hit_unnorm_ws);
+            const float3 prev_dir_to_sample_hit_unnorm_ws = sample_hit_ws - sample_ray_ctx.ray_hit_ws();
+            const float3 prev_dir_to_sample_hit_ws = normalize(prev_dir_to_sample_hit_unnorm_ws);
 
             // TODO: Using `prev_dir_to_sample_hit_unnorm_ws` explodes weights.
             const float prev_dist = sample_hit_ws_and_dist.w;
@@ -314,12 +316,12 @@ void main(uint2 px : SV_DispatchThreadID) {
             const float3 dir_to_sample_hit = normalize(dir_to_sample_hit_unnorm);
 
             const float center_to_hit_vis = -dot(sample_hit_normal_ws_dot.xyz, dir_to_sample_hit);
-            //const float prev_to_hit_vis = -dot(sample_hit_normal_ws_dot.xyz, prev_dir_to_sample_hit_ws);
+            const float prev_to_hit_vis = -dot(sample_hit_normal_ws_dot.xyz, prev_dir_to_sample_hit_ws);
 
             // Note: also doing this for sample 0, as under extreme aliasing,
             // we can easily get bad samples in.
             if (dot(dir_to_sample_hit, normal_ws) < 1e-3) {
-                continue;
+                //continue;
             }
 
             const float4 prev_rad =
@@ -350,7 +352,7 @@ void main(uint2 px : SV_DispatchThreadID) {
             float jacobian = 1;
 
             // Note: needed for sample 0 too due to temporal jitter.
-            {
+            if (1) {
                 // Distance falloff. Needed to avoid leaks.
                 jacobian *= clamp(prev_dist / dist_to_sample_hit, 1e-4, 1e4);
                 jacobian *= jacobian;
@@ -359,7 +361,7 @@ void main(uint2 px : SV_DispatchThreadID) {
                 //
                 // Wrong: must use neighbor's data, not the original ray.
                 // TODO: why does the "wrong" thing work, while the "correct" one has exploding weights?
-                 jacobian *= clamp(center_to_hit_vis / sample_hit_normal_ws_dot.w, 0, 1e4);
+                jacobian *= clamp(center_to_hit_vis / sample_hit_normal_ws_dot.w, 0, 1e4);
                 // Correct:
                 //jacobian *= clamp(center_to_hit_vis / prev_to_hit_vis, 0, 1e4);
             }
@@ -424,7 +426,7 @@ void main(uint2 px : SV_DispatchThreadID) {
     ray_orig_output_tex[px] = ray_orig_sel_ws;
     hit_normal_output_tex[px] = encode_hit_normal_and_dot(hit_normal_ws_dot);
     ray_output_tex[px] = float4(ray_hit_sel_ws - ray_orig_sel_ws, length(ray_hit_sel_ws - refl_ray_origin_ws));
-    reservoir_out_tex[px] = reservoir.as_raw();
+    reservoir_out_tex[px] = reservoir.as_fat_raw();
 
     TemporalReservoirOutput res_packed;
     res_packed.depth = depth;

@@ -9,7 +9,7 @@
 
 [[vk::binding(0)]] Texture2D<float> half_depth_tex;
 [[vk::binding(1)]] Texture2D<uint4> temporal_reservoir_packed_tex;
-[[vk::binding(2)]] RWTexture2D<uint2> reservoir_input_tex;
+[[vk::binding(2)]] RWTexture2D<uint4> reservoir_input_tex;
 [[vk::binding(3)]] cbuffer _ {
     float4 gbuffer_tex_size;
 };
@@ -28,7 +28,7 @@ void main() {
     const float2 uv = get_uv(hi_px, gbuffer_tex_size);
     const ViewRayContext view_ray_context = ViewRayContext::from_uv_and_biased_depth(uv, depth);
 
-    Reservoir1spp r = Reservoir1spp::from_raw(reservoir_input_tex[px]);
+    Reservoir1spp r = Reservoir1spp::from_fat_raw(reservoir_input_tex[px]);
     const uint2 spx = reservoir_payload_to_px(r.payload);
     const TemporalReservoirOutput spx_packed = TemporalReservoirOutput::from_raw(temporal_reservoir_packed_tex[spx]);
 
@@ -58,6 +58,6 @@ void main() {
             min(5 *length(spx_pos_ws - trace_origin_ws), length(trace_vec) * 0.999)
     ))) {
         r.W = 0;
-        reservoir_input_tex[px] = r.as_raw();
+        reservoir_input_tex[px] = r.as_fat_raw();
     }
 }

@@ -44,6 +44,24 @@ struct Reservoir1spp {
         return uint2(payload, pack_2x16f_uint(float2(M, W)));
     }
 
+    static Reservoir1spp from_fat_raw(uint4 raw) {
+        Reservoir1spp res;
+        res.w_sum = 0;
+        res.payload = raw.x;
+        //const float2 MW = unpack_2x16f_uint(raw.y);
+        //res.M = MW[0];
+        //res.W = MW[1];
+        
+        res.M = asfloat(raw.y);
+        res.W = asfloat(raw.z);
+        return res;
+    }
+
+    uint4 as_fat_raw() {
+        //return uint4(payload, pack_2x16f_uint(float2(M, W)), 0, 0);
+        return uint4(payload, asuint(M), asuint(W), 0);
+    }
+    
     bool update(float w, uint sample_payload, inout uint rng) {
         this.w_sum += w;
         this.M += 1;

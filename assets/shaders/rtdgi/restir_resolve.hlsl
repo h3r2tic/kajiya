@@ -14,7 +14,7 @@
 #include "rtdgi_common.hlsl"
 
 [[vk::binding(0)]] Texture2D<float4> radiance_tex;
-[[vk::binding(1)]] Texture2D<uint2> reservoir_input_tex;
+[[vk::binding(1)]] Texture2D<uint4> reservoir_input_tex;
 [[vk::binding(2)]] Texture2D<float4> gbuffer_tex;
 [[vk::binding(3)]] Texture2D<float> depth_tex;
 [[vk::binding(4)]] Texture2D<float4> half_view_normal_tex;
@@ -148,7 +148,7 @@ void main(uint2 px : SV_DispatchThreadID) {
         const float2 reservoir_px_offset = float2(cos(ang), sin(ang)) * radius;
         const int2 rpx = int2(floor(float2(px) * 0.5 + reservoir_px_offset));
 
-        Reservoir1spp r = Reservoir1spp::from_raw(reservoir_input_tex[rpx]);
+        Reservoir1spp r = Reservoir1spp::from_fat_raw(reservoir_input_tex[rpx]);
         const uint2 spx = reservoir_payload_to_px(r.payload);
 
         const TemporalReservoirOutput spx_packed = TemporalReservoirOutput::from_raw(temporal_reservoir_packed_tex[spx]);
@@ -170,6 +170,7 @@ void main(uint2 px : SV_DispatchThreadID) {
             const float geometric_term =
                 // TODO: fold the 2 into the PDF
                 2 * max(0.0, dot(center_normal_ws, sample_dir));
+                //2 * 0.2;
 
             float3 radiance;
             if (RTDGI_RESTIR_SPATIAL_USE_RAYMARCH_COLOR_BOUNCE) {

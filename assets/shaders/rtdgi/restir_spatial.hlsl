@@ -12,7 +12,7 @@
 #include "rtdgi_common.hlsl"
 #include "occlusion_raymarch.hlsl"
 
-[[vk::binding(0)]] Texture2D<uint2> reservoir_input_tex;
+[[vk::binding(0)]] Texture2D<uint4> reservoir_input_tex;
 [[vk::binding(1)]] Texture2D<float3> bounced_radiance_input_tex;
 [[vk::binding(2)]] Texture2D<float4> half_view_normal_tex;
 [[vk::binding(3)]] Texture2D<float> half_depth_tex;
@@ -20,7 +20,7 @@
 [[vk::binding(5)]] Texture2D<float> half_ssao_tex;
 [[vk::binding(6)]] Texture2D<uint4> temporal_reservoir_packed_tex;
 [[vk::binding(7)]] Texture2D<float3> reprojected_gi_tex;
-[[vk::binding(8)]] RWTexture2D<uint2> reservoir_output_tex;
+[[vk::binding(8)]] RWTexture2D<uint4> reservoir_output_tex;
 [[vk::binding(9)]] RWTexture2D<float3> bounced_radiance_output_tex;
 [[vk::binding(10)]] cbuffer _ {
     float4 gbuffer_tex_size;
@@ -68,7 +68,7 @@ void main(uint2 px : SV_DispatchThreadID) {
 
     float sample_radius_offset = uint_to_u01_float(hash1_mut(rng));
 
-    Reservoir1spp center_r = Reservoir1spp::from_raw(reservoir_input_tex[px]);
+    Reservoir1spp center_r = Reservoir1spp::from_fat_raw(reservoir_input_tex[px]);
 
     float kernel_tightness = 1.0 - center_ssao;
 
@@ -142,13 +142,13 @@ void main(uint2 px : SV_DispatchThreadID) {
 
         const int2 rpx = px + rpx_offset;
 
-        const uint2 reservoir_raw = reservoir_input_tex[rpx];
+        const uint4 reservoir_raw = reservoir_input_tex[rpx];
         if (0 == reservoir_raw.x) {
             // Invalid reprojectoin
             continue;
         }
 
-        Reservoir1spp r = Reservoir1spp::from_raw(reservoir_raw);
+        Reservoir1spp r = Reservoir1spp::from_fat_raw(reservoir_raw);
 
         r.M = min(r.M, 500);
 
@@ -229,7 +229,8 @@ void main(uint2 px : SV_DispatchThreadID) {
         const bool is_below_normal_plane = dot(dir_to_sample_hit, center_normal_ws) < 1e-5;
 
         if ((!is_center_sample && is_below_normal_plane) || !(relevance > 0)) {
-            continue;
+            //continue;
+            //relevance = 0;
         }
 
         // Reject neighbors with vastly different depths
@@ -373,7 +374,7 @@ void main(uint2 px : SV_DispatchThreadID) {
     reservoir.finish_stream(stream_state);
     reservoir.W = min(reservoir.W, RESTIR_RESERVOIR_W_CLAMP);
 
-    reservoir_output_tex[px] = reservoir.as_raw();
+    reservoir_output_tex[px] = reservoir.as_fat_raw();
 
     if (RTDGI_RESTIR_SPATIAL_USE_RAYMARCH_COLOR_BOUNCE) {
         bounced_radiance_output_tex[px] = radiance_output;

@@ -20,7 +20,7 @@
 [[vk::binding(0)]] Texture2D<float3> half_view_normal_tex;
 [[vk::binding(1)]] Texture2D<float> depth_tex;
 [[vk::binding(2)]] Texture2D<float4> reprojected_gi_tex;
-[[vk::binding(3)]] RWTexture2D<uint2> reservoir_tex;
+[[vk::binding(3)]] RWTexture2D<uint4> reservoir_tex;
 [[vk::binding(4)]] Texture2D<float4> reservoir_ray_history_tex;
 [[vk::binding(5)]] Texture2D<float4> reprojection_tex;
 DEFINE_IRCACHE_BINDINGS(6, 7, 8, 9, 10, 11, 12, 13, 14)
@@ -93,7 +93,7 @@ void main() {
             // rays hitting the bright spots by chance. The PDF division compounded
             // by the increase in radiance causes fireflies to appear.
             // As a HACK, we will clamp that by scaling down the `M` factor then.
-            Reservoir1spp r = Reservoir1spp::from_raw(reservoir_tex[px]);
+            Reservoir1spp r = Reservoir1spp::from_fat_raw(reservoir_tex[px]);
             const float lum_old = sRGB_to_luminance(prev_radiance);
             const float lum_new = sRGB_to_luminance(new_radiance);
             r.M *= clamp(lum_old / max(1e-8, lum_new), 0.03, 1.0);
@@ -103,7 +103,7 @@ void main() {
             const float allowed_luminance_increment = 10.0;
             r.W *= clamp(lum_old / max(1e-8, lum_new) * allowed_luminance_increment, 0.01, 1.0);
 
-            reservoir_tex[px] = r.as_raw();
+            reservoir_tex[px] = r.as_fat_raw();
         }
     }
 
