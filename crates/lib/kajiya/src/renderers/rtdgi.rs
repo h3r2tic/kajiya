@@ -39,7 +39,7 @@ impl Default for RtdgiRenderer {
             temporal2_tex: PingPongTemporalResource::new("rtdgi.temporal2"),
             temporal2_variance_tex: PingPongTemporalResource::new("rtdgi.temporal2_var"),
             temporal_hit_normal_tex: PingPongTemporalResource::new("rtdgi.hit_normal"),
-            spatial_reuse_pass_count: 2,
+            spatial_reuse_pass_count: 3,
             use_raytraced_reservoir_visibility: false,
         }
     }
@@ -377,6 +377,7 @@ impl RtdgiRenderer {
             .read(&hit_normal_history_tex)
             .read(&candidate_history_tex)
             .read(&invalidity_output_tex)
+            .read(&half_ssao_tex)
             .write(&mut radiance_output_tex)
             .write(&mut ray_orig_output_tex)
             .write(&mut ray_output_tex)

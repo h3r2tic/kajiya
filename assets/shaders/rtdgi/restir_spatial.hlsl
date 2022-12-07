@@ -31,8 +31,16 @@
     uint occlusion_raymarch_importance_only;
 };
 
-#define USE_SSAO_WEIGHING 1
 #define ALLOW_REUSE_OF_BACKFACING 1
+
+// Reject samples with mismatchin normals, and continue searching,
+// narrowing down the kernel in the process.
+// Significantly reduces darkening on curved objects, but at the price
+// of irregular workloads.
+// Should probably do some sort of a pre-pass, where promising samples
+// would be detected instead, in a shader that has less register pressure.
+#define USE_EXTENSIVE_SAMPLE_SEARCH 1
+#define EXTENSIVE_SAMPLE_SEARCH_MAX_SAMPLES 16
 
 uint2 reservoir_payload_to_px(uint payload) {
     return uint2(payload & 0xffff, payload >> 16);
@@ -99,7 +107,8 @@ void main(uint2 px : SV_DispatchThreadID) {
     const float2 dist_to_edge_xy = min(float2(px), output_tex_size.xy - px);
     const float allow_edge_overstep = center_r.M < 10 ? 100.0 : 1.25;
     //const float allow_edge_overstep = 1.25;
-    const float2 kernel_radius = min(max_kernel_radius, dist_to_edge_xy * allow_edge_overstep);
+    float2 kernel_radius = min(max_kernel_radius, dist_to_edge_xy * allow_edge_overstep);
+    float kernel_radius_scale = 1;
     //const float2 kernel_radius = max_kernel_radius;
 
     uint sample_count = DIFFUSE_GI_USE_RESTIR
@@ -134,13 +143,31 @@ void main(uint2 px : SV_DispatchThreadID) {
         float2 radius =
             0 == sample_i
             ? 0
-            : (pow(float(sample_i + sample_radius_offset) / sample_count, 0.5) * kernel_radius);
+            : (sqrt(float(sample_i + sample_radius_offset) / sample_count) * kernel_radius * kernel_radius_scale);
         int2 rpx_offset = float2(cos(ang), sin(ang)) * radius;
 
         const bool is_center_sample = sample_i == 0;
         //const bool is_center_sample = all(rpx_offset == 0);
 
         const int2 rpx = px + rpx_offset;
+
+        const float3 sample_normal_vs = half_view_normal_tex[rpx].rgb;
+        const float normal_similarity_dot = dot(sample_normal_vs, center_normal_vs);
+
+        if (1&&USE_EXTENSIVE_SAMPLE_SEARCH) {
+            const float t = sample_i / float(EXTENSIVE_SAMPLE_SEARCH_MAX_SAMPLES - 1);
+            //const float normal_cutoff = 0.9;
+
+            // Try hard initally, but then back off
+            const float normal_cutoff = lerp(0.9, -0.5, t * t * t);
+            
+            if (normal_similarity_dot < normal_cutoff) {
+                sample_count = min(sample_count + 1, EXTENSIVE_SAMPLE_SEARCH_MAX_SAMPLES);
+                kernel_radius_scale *= 0.85;
+                kernel_radius_scale = max(0.4, kernel_radius_scale);
+                continue;
+            }
+        }
 
         const uint2 reservoir_raw = reservoir_input_tex[rpx];
         if (0 == reservoir_raw.x) {
@@ -172,14 +199,12 @@ void main(uint2 px : SV_DispatchThreadID) {
 
         const int2 sample_offset = int2(px) - int2(rpx);
         const float sample_dist2 = dot(sample_offset, sample_offset);
-        const float3 sample_normal_vs = half_view_normal_tex[rpx].rgb;
 
         float3 sample_radiance;
         if (RTDGI_RESTIR_SPATIAL_USE_RAYMARCH_COLOR_BOUNCE) {
             sample_radiance = bounced_radiance_input_tex[rpx];
         }
 
-        const float normal_similarity_dot = dot(sample_normal_vs, center_normal_vs);
         #if ALLOW_REUSE_OF_BACKFACING
             // Allow reuse even with surfaces that face away, but weigh them down.
             relevance *= normal_inluence_nonlinearity(normal_similarity_dot, 0.5)
@@ -189,10 +214,6 @@ void main(uint2 px : SV_DispatchThreadID) {
         #endif
 
         const float sample_ssao = half_ssao_tex[rpx];
-
-        #if USE_SSAO_WEIGHING
-            relevance *= 1 - abs(sample_ssao - center_ssao);
-        #endif
 
         const float2 rpx_uv = get_uv(
             rpx * 2 + HALFRES_SUBSAMPLE_OFFSET,
@@ -272,7 +293,17 @@ void main(uint2 px : SV_DispatchThreadID) {
             }
             
             raymarch.march(visibility, sample_radiance);
-		}
+		} else {
+            #if RTDGI_RESTIR_SPATIAL_USE_SSAO_WEIGHING
+                //relevance *= 1 - abs(sample_ssao - center_ssao);
+                //relevance *= abs(sample_ssao - center_ssao) > 0.2 ? 0 : 1;
+                //relevance *= pow(saturate(1 - abs(sample_ssao - center_ssao)), 6);
+
+                if (abs(sample_ssao - center_ssao) > 0.2) {
+                    continue;
+                }
+            #endif
+        }
 
         const float3 sample_hit_normal_ws = spx_packed.hit_normal_ws;
 

@@ -14,6 +14,7 @@
 #include "near_field_settings.hlsl"
 #include "rtdgi_restir_settings.hlsl"
 #include "rtdgi_common.hlsl"
+#include "occlusion_raymarch.hlsl"
 
 [[vk::binding(0)]] Texture2D<float3> half_view_normal_tex;
 [[vk::binding(1)]] Texture2D<float> depth_tex;
@@ -28,14 +29,15 @@
 [[vk::binding(10)]] Texture2D<float4> hit_normal_history_tex;
 [[vk::binding(11)]] Texture2D<float4> candidate_history_tex;
 [[vk::binding(12)]] Texture2D<float2> rt_invalidity_tex;
-[[vk::binding(13)]] RWTexture2D<float4> radiance_out_tex;
-[[vk::binding(14)]] RWTexture2D<float3> ray_orig_output_tex;
-[[vk::binding(15)]] RWTexture2D<float4> ray_output_tex;
-[[vk::binding(16)]] RWTexture2D<float4> hit_normal_output_tex;
-[[vk::binding(17)]] RWTexture2D<uint2> reservoir_out_tex;
-[[vk::binding(18)]] RWTexture2D<float4> candidate_out_tex;
-[[vk::binding(19)]] RWTexture2D<uint4> temporal_reservoir_packed_tex;
-[[vk::binding(20)]] cbuffer _ {
+[[vk::binding(13)]] Texture2D<float> half_ssao_tex;
+[[vk::binding(14)]] RWTexture2D<float4> radiance_out_tex;
+[[vk::binding(15)]] RWTexture2D<float3> ray_orig_output_tex;
+[[vk::binding(16)]] RWTexture2D<float4> ray_output_tex;
+[[vk::binding(17)]] RWTexture2D<float4> hit_normal_output_tex;
+[[vk::binding(18)]] RWTexture2D<uint2> reservoir_out_tex;
+[[vk::binding(19)]] RWTexture2D<float4> candidate_out_tex;
+[[vk::binding(20)]] RWTexture2D<uint4> temporal_reservoir_packed_tex;
+[[vk::binding(21)]] cbuffer _ {
     float4 gbuffer_tex_size;
 };
 
@@ -93,6 +95,8 @@ void main(uint2 px : SV_DispatchThreadID) {
         reservoir_out_tex[px] = 0;
         return;
     }
+
+    const float center_ssao = half_ssao_tex[px].r;
 
     const float2 uv = get_uv(hi_px, gbuffer_tex_size);
     const ViewRayContext view_ray_context = ViewRayContext::from_uv_and_biased_depth(uv, depth);
@@ -177,7 +181,7 @@ void main(uint2 px : SV_DispatchThreadID) {
             sample_i < MAX_RESOLVE_SAMPLE_COUNT
             // Use permutation sampling, but only up to a certain M; those are lower quality,
             // so we want to be rather conservative.
-            && stream_state.M_sum < 1.25 * RESTIR_TEMPORAL_M_CLAMP;
+            && (sample_i == 0 || stream_state.M_sum < 0.75 * RESTIR_TEMPORAL_M_CLAMP);
             ++sample_i) {
             const int2 rpx_offset = get_rpx_offset(sample_i, frame_constants.frame_index);
             if (sample_i > 0 && all(rpx_offset == 0)) {
@@ -276,6 +280,11 @@ void main(uint2 px : SV_DispatchThreadID) {
                 }
             #endif
 
+            const float sample_ssao = half_ssao_tex[rpx];
+            if (abs(sample_ssao - center_ssao) > 0.1) {
+                //continue;
+            }
+
             const float3 sample_normal_vs = half_view_normal_tex[neighbor_px].rgb;
             const float normal_similarity_dot = max(0.0, dot(sample_normal_vs, normal_vs));
 
@@ -370,6 +379,47 @@ void main(uint2 px : SV_DispatchThreadID) {
                     if (jacobian > RTDGI_RESTIR_JACOBIAN_BASED_REJECTION_VALUE) { continue; }
                 #endif
             }
+
+            // Raymarch to check occlusion
+            if (0 && sample_i > 0) {
+                const float2 spx_uv = get_uv(
+                    spx * 2 + HALFRES_SUBSAMPLE_OFFSET,
+                    gbuffer_tex_size);
+
+                const float2 ray_orig_uv = spx_uv;
+
+            	//const float surface_offset_len = length(spx_ray_ctx.ray_hit_vs() - view_ray_context.ray_hit_vs());
+                const float surface_offset_len = length(
+                    // Use the center depth for simplicity; this doesn't need to be exact.
+                    // Faster, looks about the same.
+                    ViewRayContext::from_uv_and_depth(ray_orig_uv, depth).ray_hit_vs() - view_ray_context.ray_hit_vs()
+                );
+
+                // Multiplier over the surface offset from the center to the neighbor
+                const float MAX_RAYMARCH_DIST_MULT = 3.0;
+
+                // Trace towards the hit point.
+
+                const float3 raymarch_dir_unnorm_ws = sample_hit_ws - view_ray_context.ray_hit_ws();
+                const float3 raymarch_end_ws =
+                    view_ray_context.ray_hit_ws()
+                    // TODO: what's a good max distance to raymarch?
+                    + raymarch_dir_unnorm_ws * min(1.0, MAX_RAYMARCH_DIST_MULT * surface_offset_len / length(raymarch_dir_unnorm_ws));
+
+                OcclusionScreenRayMarch raymarch = OcclusionScreenRayMarch::create(
+                    uv, view_ray_context.ray_hit_cs.xyz, view_ray_context.ray_hit_ws(),
+                    raymarch_end_ws,
+                    gbuffer_tex_size.xy
+                )
+                .with_max_sample_count(6)
+                //.with_halfres_depth(output_tex_size.xy, half_depth_tex);
+                .with_fullres_depth(depth_tex);
+                
+                float3 sample_radiance = 1;
+                float derp = 1;
+                raymarch.march(derp, sample_radiance);
+                if (derp < 0.5) continue;
+    		}
 
             r.M *= relevance;
 

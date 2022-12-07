@@ -110,7 +110,7 @@ void main(uint2 px: SV_DispatchThreadID) {
     //const uint2 reproj_px = uint2(px * input_resolution_fraction + 0.5);
 
     #if SHORT_CIRCUIT
-        temporal_output_tex[px] = lerp(input_tex[reproj_px], float4(encode_rgb(history_tex[px].rgb), 1), 1.0 - 1.0 / SHORT_CIRCUIT);
+        temporal_output_tex[px] = clamp(lerp(input_tex[reproj_px], float4(encode_rgb(history_tex[px].rgb), 1), 1.0 - 1.0 / SHORT_CIRCUIT), 0, 10000);
         output_tex[px] = temporal_output_tex[px];
         return;
     #endif
